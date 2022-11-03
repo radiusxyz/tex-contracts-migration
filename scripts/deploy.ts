@@ -103,8 +103,8 @@ async function main() {
       "type": "function"
     }
   ]
-  const texFactory = new ethers.Contract(texFactoryAddress,texFactoryAbi,accounts[0]);
-  //await texFactory.setFeeToSetter(accounts[2].address);
+  const texFactory = new ethers.Contract(texFactoryAddress,texFactoryAbi,accounts[1]);
+  await texFactory.setFeeToSetter(accounts[2].address);
   console.log("TexFactory deployed to:", texFactory.address);
   console.log("FeeToSetterAddress:", accounts[2].address);
 
