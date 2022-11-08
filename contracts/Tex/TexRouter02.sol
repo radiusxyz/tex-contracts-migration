@@ -1,6 +1,8 @@
 
 pragma experimental ABIEncoderV2;
-pragma solidity =0.6.6;
+pragma solidity ^0.6.6;
+
+import "hardhat/console.sol";
 
 import "./interfaces/ITexFactory.sol";
 import "./libraries/TransferHelper.sol";
@@ -28,6 +30,10 @@ contract TexRouter02 is ITexRouter02 {
 
   address public operator;
   address public operatorSetter;
+
+  // validationType: 0 - txId invalid / 1 - nonce invalid / 2 - signature invalid
+  event Invalid(uint256 round, uint256 index, uint8 validationType);
+  event SwapEvent(uint256 round, uint256 index, bool success);
 
   mapping(address => uint256) public nonces;
 
@@ -141,11 +147,7 @@ contract TexRouter02 is ITexRouter02 {
     if (ITexFactory(factory).getPair(tokenA, tokenB) == address(0)) {
       ITexFactory(factory).createPair(tokenA, tokenB);
     }
-    (uint256 reserveA, uint256 reserveB) = TexLibrary.getReserves(
-      factory,
-      tokenA,
-      tokenB
-    );
+    (uint256 reserveA, uint256 reserveB) = TexLibrary.getReserves(factory, tokenA, tokenB);
     if (reserveA == 0 && reserveB == 0) {
       (amountA, amountB) = (amountADesired, amountBDesired);
     } else {
@@ -453,138 +455,166 @@ contract TexRouter02 is ITexRouter02 {
     bytes32[] memory r, 
     bytes32[] memory s
   ) public returns (uint256[] memory amounts) {
-    bytes32 digest;
+    console.log("Router - batchSwap start");
+
+    require(
+      Recorder(recorder).getRoundTxLnegth() <= swap.length,
+      "Low txs"
+    );
+  
+    uint256 currentRound = Recorder(recorder).currentRound();
+    bytes32 txId;
+    
     for (uint256 i = 0; i < swap.length; i++) {
-      digest = keccak256(abi.encodePacked(
-        "\x19\x01",
-        DOMAIN_SEPARATOR,
-        _generateHashedMessage(swap[i])
-      ));
-      if(Recorder(recorder).validate(keccak256(abi.encodePacked(
-            swap[i].txOwner,
-            swap[i].functionSelector,
-            swap[i].amountIn,
-            swap[i].amountOut,
-            swap[i].path,
-            swap[i].to,
-            swap[i].nonce,
-            swap[i].deadline
-          )
-        ),
-        swap[i].txOwner)
-        && (swap[i].nonce == nonces[swap[i].txOwner])
-        && (ecrecover(digest, v[i], r[i], s[i]) == swap[i].txOwner)) {
-        if(swap[i].functionSelector == 0x375734d9) {   // if else statement
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapExactTokensForTokens(address,uint256,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountIn,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0x22b58410){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapTokensForExactTokens(address,uint256,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountIn,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0x7ff36ab5){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapExactETHForTokens(uint256,address[],address,uint256)",
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0xfa3219d5){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapTokensForExactETH(address,uint256,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountIn,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0x9c91fcb5){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapExactTokensForETH(address,uint256,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountIn,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0xb05f579e){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapETHForExactTokens(address,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0xb1ca4936){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapExactTokensForTokensSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountIn,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0xb6f9de95){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        } else if(swap[i].functionSelector == 0x5cae0310){
-          address(this).delegatecall(
-            abi.encodeWithSignature(
-              "swapExactTokensForETHSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
-              swap[i].txOwner,
-              swap[i].amountIn,
-              swap[i].amountOut,
-              swap[i].path,
-              swap[i].to,
-              swap[i].deadline
-            )
-          );
-        }  
+      txId = keccak256(abi.encodePacked(
+          swap[i].txOwner,
+          swap[i].functionSelector,
+          swap[i].amountIn,
+          swap[i].amountOut,
+          swap[i].path,
+          swap[i].to,
+          swap[i].nonce,
+          swap[i].deadline
+        )
+      );
+
+      if (Recorder(recorder).validate(txId) == true) {
+        if (Recorder(recorder).isCancelTx(txId, swap[i].txOwner) == false) {
+          if((swap[i].nonce == nonces[swap[i].txOwner])) {
+            if (ecrecover(keccak256(abi.encodePacked(
+              "\x19\x01",
+              DOMAIN_SEPARATOR,
+              _generateHashedMessage(swap[i])
+            )), v[i], r[i], s[i]) == swap[i].txOwner) {
+              
+              if(swap[i].functionSelector == 0x375734d9) {   // if else statement
+                (bool success, bytes memory _) = address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapExactTokensForTokens(address,uint256,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountIn,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+
+                console.log(currentRound, i, success);
+                emit SwapEvent(currentRound, i, success);
+
+              } else if(swap[i].functionSelector == 0x22b58410){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapTokensForExactTokens(address,uint256,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountIn,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0x7ff36ab5){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapExactETHForTokens(uint256,address[],address,uint256)",
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0xfa3219d5){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapTokensForExactETH(address,uint256,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountIn,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0x9c91fcb5){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapExactTokensForETH(address,uint256,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountIn,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0xb05f579e){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapETHForExactTokens(address,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0xb1ca4936){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapExactTokensForTokensSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountIn,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0xb6f9de95){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              } else if(swap[i].functionSelector == 0x5cae0310){
+                address(this).delegatecall(
+                  abi.encodeWithSignature(
+                    "swapExactTokensForETHSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
+                    swap[i].txOwner,
+                    swap[i].amountIn,
+                    swap[i].amountOut,
+                    swap[i].path,
+                    swap[i].to,
+                    swap[i].deadline
+                  )
+                );
+              }  
+            } else {
+              console.log(currentRound, i, 2);
+              emit Invalid(currentRound, i, 2);
+            }
+          } else {
+            console.log(currentRound, i, 1);
+            emit Invalid(currentRound, i, 1);
+          }
+        }
+      } else {
+        console.log(currentRound, i, 0);
+        emit Invalid(currentRound, i, 0);
       }
+
       Recorder(recorder).goForward();
     }
   }
 
   function swapExactTokensForTokens(
-    address origin,
+    address sender,
     uint256 amountIn,
     uint256 amountOutMin,
     address[] calldata path,
@@ -596,25 +626,37 @@ contract TexRouter02 is ITexRouter02 {
     override
     ensure(deadline)
     returns (uint256[] memory amounts)
-  {
-    amounts = TexLibrary.getAmountsOut(factory, amountIn-div(amountIn,2000), path);
+{
+    uint256 feeAmount = div(amountIn,2000);
+    amounts = TexLibrary.getAmountsOut(factory, amountIn - feeAmount, path);
+    console.log("swapExactTokensForTokens - 1");
     require(
       amounts[amounts.length - 1] >= amountOutMin,
-      "TexRouter: INSUFFICIENT_OUTPUT_AMOUNT"
-    );
+      "INSUFFICIENT_OUTPUT_AMOUNT"
+    );   
+    
+    console.log("swapExactTokensForTokens - 2");
+    console.log("tx sender", sender);
+    console.log("fee to", feeTo);
+
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       feeTo,
-      div(amountIn,20)
+      feeAmount
     );
+
+    console.log("swapExactTokensForTokens - 3");
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amounts[0]
     );
+    console.log("swapExactTokensForTokens - swap start");
     _swap(amounts, path, to);
+    console.log("swapExactTokensForTokens - success");
+    console.log("");
   }
 
   function swapTokensForExactTokens(
@@ -909,4 +951,3 @@ contract TexRouter02 is ITexRouter02 {
     return TexLibrary.getAmountsIn(factory, amountOut, path);
   }
 }
-

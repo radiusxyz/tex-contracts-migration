@@ -1,13 +1,13 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.6.6;
 
+import "hardhat/console.sol";
+
 contract Recorder {
   uint256 public currentRound;
   uint256 public currentIndex;
 
   address public owner;
-
-  event Commit(uint256 round, uint256 index);
 
   constructor() public {
     currentRound = 0;
@@ -20,8 +20,6 @@ contract Recorder {
   mapping(bytes32 => mapping(address => bool)) public useOfVeto;
 
   function addTxIds(bytes32[] memory _txList) public {
-    //should be included
-    //require(isSaved[currentRound] == false);
     roundTxIdList[currentRound] = _txList;
     isSaved[currentRound] = true;
     currentIndex = 0;
@@ -31,13 +29,19 @@ contract Recorder {
     useOfVeto[_txId][msg.sender] = true;
   }
 
-  function validate(bytes32 _txId, address _txOwner) public view returns (bool) {
-    if (roundTxIdList[currentRound][currentIndex] == _txId && useOfVeto[_txId][_txOwner] != true) return true;
-    return false;
+  function getRoundTxLnegth() public view returns (uint256) {
+    return roundTxIdList[currentRound].length;
+  }
+
+  function isCancelTx(bytes32 _txId, address _txOwner) public view returns (bool)  {
+    return useOfVeto[_txId][_txOwner] == true;
+  }
+
+  function validate(bytes32 _txId) public view returns (bool) {
+    return roundTxIdList[currentRound][currentIndex] == _txId;
   }
 
   function goForward() public {
-    emit Commit(currentRound, currentIndex);
     currentIndex++;
     if (roundTxIdList[currentRound].length == currentIndex) {
       currentRound++;

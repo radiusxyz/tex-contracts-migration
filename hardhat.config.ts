@@ -1,4 +1,4 @@
-import { HardhatUserConfig } from "hardhat/config";
+import { HardhatUserConfig, task } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 
 import dotenv from "dotenv";
@@ -51,7 +51,7 @@ const config: HardhatUserConfig = {
             runs: 1000,
           },
         },
-      },      
+      },
     ],
     overrides: {},
   },
@@ -62,6 +62,9 @@ const config: HardhatUserConfig = {
     artifacts: "./artifacts"
   },
   networks: {
+    // hardhat: {
+    //   allowUnlimitedContractSize: true
+    // },
     optimism_kovan: {
       url: process.env.OPTIMISM_KOVAN_URL || "",
       accounts: [
