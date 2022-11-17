@@ -12,7 +12,7 @@ const config: HardhatUserConfig = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 1000,
+            runs: 200,
           },
         },
       },
@@ -21,7 +21,7 @@ const config: HardhatUserConfig = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 1000,
+            runs: 200,
           },
         },
       },
@@ -30,7 +30,7 @@ const config: HardhatUserConfig = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 1000,
+            runs: 200,
           },
         },
       },
@@ -39,7 +39,7 @@ const config: HardhatUserConfig = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 1000,
+            runs: 200,
           },
         },
       },
@@ -48,7 +48,7 @@ const config: HardhatUserConfig = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 1000,
+            runs: 200,
           },
         },
       },
@@ -72,7 +72,6 @@ const config: HardhatUserConfig = {
         process.env.PRIV_KEY1 as any,
         process.env.PRIV_KEY2 as any,
       ],
-      gas: 10000000,
     },
     matic_mumbai: {
       url: process.env.MUMBAI_URL || "",
@@ -81,7 +80,6 @@ const config: HardhatUserConfig = {
         process.env.PRIV_KEY1 as any,
         process.env.PRIV_KEY2 as any,
       ],
-      gas: 10000000,
     },
     DEV: {
       url: process.env.DEV_URL || "",
@@ -90,7 +88,6 @@ const config: HardhatUserConfig = {
         process.env.PRIV_KEY1 as any,
         process.env.PRIV_KEY2 as any,
       ],
-      gas: 10000000,
     },
   },
 };

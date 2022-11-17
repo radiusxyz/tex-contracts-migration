@@ -1,4 +1,3 @@
-
 pragma experimental ABIEncoderV2;
 pragma solidity ^0.6.6;
 
@@ -10,20 +9,22 @@ import "./libraries/TransferHelper.sol";
 import "./interfaces/ITexRouter02.sol";
 import "./libraries/TexLibrary.sol";
 import "./libraries/SafeMath.sol";
+
+import "./libraries/Swap.sol";
+
 import "./interfaces/IERC20.sol";
 import "./interfaces/IWETH.sol";
 
 import "./Recorder.sol";
+import "./Vault.sol";
 
 contract TexRouter02 is ITexRouter02 {
   using SafeMath for uint256;
-
   address public immutable override factory;
   address public immutable override WETH;
-
-  address public immutable recorder;
-
-  address public owner;
+  
+  Recorder public immutable recorder;
+  Vault public immutable vault;
 
   address public feeTo;
   address public feeToSetter;
@@ -31,33 +32,11 @@ contract TexRouter02 is ITexRouter02 {
   address public operator;
   address public operatorSetter;
 
-  // validationType: 0 - txId invalid / 1 - nonce invalid / 2 - signature invalid
   event Invalid(uint256 round, uint256 index, uint8 validationType);
   event SwapEvent(uint256 round, uint256 index, bool success);
-
   mapping(address => uint256) public nonces;
 
-  struct EIP712Domain {
-    string  name;
-    string  version;
-    uint256 chainId;
-    address verifyingContract;
-  }
-
-  struct Swap {
-    address txOwner;
-    bytes4 functionSelector;
-    uint256 amountIn;
-    uint256 amountOut;
-    address[] path;
-    address to;
-    uint256 nonce;
-    uint256 deadline;
-  }
-
   bytes32 constant EIP712DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-  bytes32 constant SWAPDOMAIN_TYPEHASH = keccak256("Swap(address txOwner,bytes4 functionSelector,uint256 amountIn,uint256 amountOut,address[] path,address to,uint256 nonce,uint256 deadline)");
-  bytes32 public DOMAIN_SEPARATOR;
 
   modifier ensure(uint256 deadline) {
     require(deadline >= block.timestamp, "TexRouter: EXPIRED");
@@ -65,29 +44,42 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   constructor(
-    address _recorder,
     address _factory,
     address _WETH,
     address _feeToSetter,
     address _operatorSetter
   ) public {
-    recorder = _recorder;
     factory = _factory;
     WETH = _WETH;
-    feeToSetter = _feeToSetter;
-    operatorSetter = _operatorSetter;
-    owner = msg.sender;
 
-    DOMAIN_SEPARATOR = _generateHashedMessage(EIP712Domain({
-      name: "Tex swap",
-      version: "1",
-      chainId: 80001,
-      verifyingContract: address(this)
-    }));  
+    feeToSetter = _feeToSetter;
+    feeTo = msg.sender;
+
+    operatorSetter = _operatorSetter;
+    operator = msg.sender;
+
+    bytes32 DOMAIN_SEPARATOR = keccak256(abi.encode(
+      EIP712DOMAIN_TYPEHASH,
+      keccak256(bytes("Tex swap")),
+      keccak256(bytes("1")),
+      80001,
+      address(this)
+    ));  
+
+    recorder = new Recorder(msg.sender, DOMAIN_SEPARATOR);    
+    vault = new Vault(msg.sender, DOMAIN_SEPARATOR);
   }
 
   receive() external payable {
     assert(msg.sender == WETH); // only accept ETH via fallback from the WETH contract
+  }
+
+  function claim(
+    Swap.EIP712Swap memory swap, 
+    Swap.TxOrderMsg memory txOrderMsg, 
+    Swap.Signature memory operatorSig
+  ) public {
+    vault.claim(recorder, msg.sender, swap, txOrderMsg, operatorSig);
   }
 
   function setFeeTo(address _feeTo) external {
@@ -96,42 +88,20 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   function setFeeToSetter(address _feeToSetter) external {
-    require(msg.sender == feeToSetter || msg.sender == owner, "Tex: FORBIDDEN");
+    require(msg.sender == feeToSetter, "Tex: FORBIDDEN");
     feeToSetter = _feeToSetter;
   }
 
   function setOperator(address _operator) external {
     require(msg.sender == operatorSetter, "Tex: FORBIDDEN");
     operator = _operator;
+    recorder.setOperator(_operator);
+    vault.setOperator(_operator);
   }
 
   function setOperatorSetter(address _operatorSetter) external {
-    require(msg.sender == operatorSetter || msg.sender == owner, "Tex: FORBIDDEN");
+    require(msg.sender == operatorSetter, "Tex: FORBIDDEN");
     operatorSetter = _operatorSetter;
-  }
-
-  function _generateHashedMessage(EIP712Domain memory eip712Domain) internal pure returns (bytes32) {
-    return keccak256(abi.encode(
-      EIP712DOMAIN_TYPEHASH,
-      keccak256(bytes(eip712Domain.name)),
-      keccak256(bytes(eip712Domain.version)),
-      eip712Domain.chainId,
-      eip712Domain.verifyingContract
-    ));
-  }
-
-  function _generateHashedMessage(Swap memory swap) internal pure returns (bytes32) {
-    return keccak256(abi.encode(
-      SWAPDOMAIN_TYPEHASH,
-      swap.txOwner,
-      swap.functionSelector,
-      swap.amountIn,
-      swap.amountOut,
-      keccak256(abi.encodePacked(swap.path)),
-      swap.to,
-      swap.nonce,
-      swap.deadline
-    ));
   }
 
   // **** ADD LIQUIDITY ****
@@ -433,183 +403,113 @@ contract TexRouter02 is ITexRouter02 {
       );
     }
   }
-
-  function div(uint256 a, uint256 b) internal pure returns (uint256) {
-    require(b > 0, "SafeMath: division by zero");
-    return a / b;
-  }
-
-  //0x375734d9 swapExactTokensForTokens(address,uint256,uint256,address[],address,uint256)
-  //0x22b58410 swapTokensForExactTokens(address,uint256,uint256,address[],address,uint256)
-  //0x7ff36ab5 swapExactETHForTokens(uint256,address[],address,uint256)
-  //0xfa3219d5 swapTokensForExactETH(address,uint256,uint256,address[],address,uint256)
-  //0x9c91fcb5 swapExactTokensForETH(address,uint256,uint256,address[],address,uint256)
-  //0xb05f579e swapETHForExactTokens(address,uint256,address[],address,uint256)
-  //0xb1ca4936 swapExactTokensForTokensSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)
-  //0xb6f9de95 swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)
-  //0x5cae0310 swapExactTokensForETHSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)
-
-  function batchSwap(
-    Swap[] memory swap, 
-    uint8[] memory v, 
-    bytes32[] memory r, 
-    bytes32[] memory s
-  ) public returns (uint256[] memory amounts) {
-    console.log("Router - batchSwap start");
-
-    require(
-      Recorder(recorder).getRoundTxLnegth() <= swap.length,
-      "Low txs"
-    );
   
-    uint256 currentRound = Recorder(recorder).currentRound();
-    bytes32 txId;
-    
-    for (uint256 i = 0; i < swap.length; i++) {
-      txId = keccak256(abi.encodePacked(
-          swap[i].txOwner,
-          swap[i].functionSelector,
-          swap[i].amountIn,
-          swap[i].amountOut,
-          swap[i].path,
-          swap[i].to,
-          swap[i].nonce,
-          swap[i].deadline
-        )
-      );
+  function batchSwap(
+    Swap.EIP712Swap[] memory swaps
+  ) public {
+    require(address(vault).balance >= 1000000000000000000, "Insufficient deposit");
+    require(recorder.validateRoundTxCount(swaps.length), "Invalid tx count");
 
-      if (Recorder(recorder).validate(txId) == true) {
-        if (Recorder(recorder).isCancelTx(txId, swap[i].txOwner) == false) {
-          if((swap[i].nonce == nonces[swap[i].txOwner])) {
-            if (ecrecover(keccak256(abi.encodePacked(
-              "\x19\x01",
-              DOMAIN_SEPARATOR,
-              _generateHashedMessage(swap[i])
-            )), v[i], r[i], s[i]) == swap[i].txOwner) {
-              
-              if(swap[i].functionSelector == 0x375734d9) {   // if else statement
-                (bool success, bytes memory _) = address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapExactTokensForTokens(address,uint256,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountIn,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-
-                console.log(currentRound, i, success);
-                emit SwapEvent(currentRound, i, success);
-
-              } else if(swap[i].functionSelector == 0x22b58410){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapTokensForExactTokens(address,uint256,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountIn,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0x7ff36ab5){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapExactETHForTokens(uint256,address[],address,uint256)",
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0xfa3219d5){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapTokensForExactETH(address,uint256,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountIn,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0x9c91fcb5){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapExactTokensForETH(address,uint256,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountIn,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0xb05f579e){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapETHForExactTokens(address,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0xb1ca4936){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapExactTokensForTokensSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountIn,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0xb6f9de95){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              } else if(swap[i].functionSelector == 0x5cae0310){
-                address(this).delegatecall(
-                  abi.encodeWithSignature(
-                    "swapExactTokensForETHSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
-                    swap[i].txOwner,
-                    swap[i].amountIn,
-                    swap[i].amountOut,
-                    swap[i].path,
-                    swap[i].to,
-                    swap[i].deadline
-                  )
-                );
-              }  
-            } else {
-              console.log(currentRound, i, 2);
-              emit Invalid(currentRound, i, 2);
-            }
-          } else {
-            console.log(currentRound, i, 1);
-            emit Invalid(currentRound, i, 1);
-          }
+    for (uint256 i = 0; i < swaps.length; i++) {
+      bool success = false;
+      if (recorder.validate(swaps[i]) && (swaps[i].nonce == nonces[swaps[i].txOwner]++)) {
+        if(swaps[i].functionSelector == 0x375734d9) {
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapExactTokensForTokens(address,uint256,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountIn,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0x22b58410){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapTokensForExactTokens(address,uint256,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountIn,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0x7ff36ab5){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapExactETHForTokens(uint256,address[],address,uint256)",
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0xfa3219d5){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapTokensForExactETH(address,uint256,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountIn,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0x9c91fcb5){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapExactTokensForETH(address,uint256,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountIn,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0xb05f579e){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapETHForExactTokens(address,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0xb1ca4936){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapExactTokensForTokensSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountIn,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
+        } else if(swaps[i].functionSelector == 0x5cae0310){
+          (success,) = address(this).delegatecall(
+            abi.encodeWithSignature(
+              "swapExactTokensForETHSupportingFeeOnTransferTokens(address,uint256,uint256,address[],address,uint256)",
+              swaps[i].txOwner,
+              swaps[i].amountIn,
+              swaps[i].amountOut,
+              swaps[i].path,
+              swaps[i].to,
+              swaps[i].deadline
+            )
+          );
         }
-      } else {
-        console.log(currentRound, i, 0);
-        emit Invalid(currentRound, i, 0);
-      }
-
-      Recorder(recorder).goForward();
+      } 
+      emit SwapEvent(recorder.currentRound(), i, success);
+      recorder.goForward();
     }
   }
 
@@ -627,15 +527,15 @@ contract TexRouter02 is ITexRouter02 {
     ensure(deadline)
     returns (uint256[] memory amounts)
 {
-    uint256 feeAmount = div(amountIn,2000);
+    uint256 feeAmount = amountIn / 2000;
     amounts = TexLibrary.getAmountsOut(factory, amountIn - feeAmount, path);
-    console.log("swapExactTokensForTokens - 1");
+
     require(
       amounts[amounts.length - 1] >= amountOutMin,
       "INSUFFICIENT_OUTPUT_AMOUNT"
     );   
     
-    console.log("swapExactTokensForTokens - 2");
+    console.log("swapExactTokensForTokens");
     console.log("tx sender", sender);
     console.log("fee to", feeTo);
 
@@ -645,22 +545,23 @@ contract TexRouter02 is ITexRouter02 {
       feeTo,
       feeAmount
     );
+    console.log("swapExactTokensForTokens - complete to send fee");
 
-    console.log("swapExactTokensForTokens - 3");
     TransferHelper.safeTransferFrom(
       path[0],
       sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amounts[0]
     );
-    console.log("swapExactTokensForTokens - swap start");
+    console.log("swapExactTokensForTokens - complete to send coin to pair");
+    
     _swap(amounts, path, to);
-    console.log("swapExactTokensForTokens - success");
+    console.log("swapExactTokensForTokens - complete to swap");
     console.log("");
   }
 
   function swapTokensForExactTokens(
-    address origin,
+    address sender,
     uint256 amountOut,
     uint256 amountInMax,
     address[] calldata path,
@@ -677,7 +578,7 @@ contract TexRouter02 is ITexRouter02 {
     require(amounts[0] <= amountInMax, "TexRouter: EXCESSIVE_INPUT_AMOUNT");
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amounts[0]
     );
@@ -714,7 +615,7 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   function swapTokensForExactETH(
-    address origin,
+    address sender,
     uint256 amountOut,
     uint256 amountInMax,
     address[] calldata path,
@@ -732,7 +633,7 @@ contract TexRouter02 is ITexRouter02 {
     require(amounts[0] <= amountInMax, "TexRouter: EXCESSIVE_INPUT_AMOUNT");
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amounts[0]
     );
@@ -742,7 +643,7 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   function swapExactTokensForETH(
-    address origin,
+    address sender,
     uint256 amountIn,
     uint256 amountOutMin,
     address[] calldata path,
@@ -763,7 +664,7 @@ contract TexRouter02 is ITexRouter02 {
     );
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amounts[0]
     );
@@ -773,7 +674,7 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   function swapETHForExactTokens(
-    address origin,
+    address sender,
     uint256 amountOut,
     address[] calldata path,
     address to,
@@ -799,7 +700,7 @@ contract TexRouter02 is ITexRouter02 {
     _swap(amounts, path, to);
     // refund dust eth, if any
     if (msg.value > amounts[0])
-      TransferHelper.safeTransferETH(origin, msg.value - amounts[0]);
+      TransferHelper.safeTransferETH(sender, msg.value - amounts[0]);
   }
 
   // **** SWAP (supporting fee-on-transfer tokens) ****
@@ -838,7 +739,7 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   function swapExactTokensForTokensSupportingFeeOnTransferTokens(
-    address origin,
+    address sender,
     uint256 amountIn,
     uint256 amountOutMin,
     address[] calldata path,
@@ -847,7 +748,7 @@ contract TexRouter02 is ITexRouter02 {
   ) external virtual override ensure(deadline) {
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amountIn
     );
@@ -885,7 +786,7 @@ contract TexRouter02 is ITexRouter02 {
   }
 
   function swapExactTokensForETHSupportingFeeOnTransferTokens(
-    address origin,
+    address sender,
     uint256 amountIn,
     uint256 amountOutMin,
     address[] calldata path,
@@ -895,7 +796,7 @@ contract TexRouter02 is ITexRouter02 {
     require(path[path.length - 1] == WETH, "TexRouter: INVALID_PATH");
     TransferHelper.safeTransferFrom(
       path[0],
-      origin,
+      sender,
       TexLibrary.pairFor(factory, path[0], path[1]),
       amountIn
     );
