@@ -1,6 +1,8 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.6.6;
 
+import "hardhat/console.sol";
+
 contract Recorder {
   uint256 public currentRound;
   uint256 public currentIndex;

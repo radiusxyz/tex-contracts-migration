@@ -53,6 +53,7 @@ contract TexRouter02 is ITexRouter02 {
 
   bytes32 constant EIP712DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
   bytes32 constant SWAPDOMAIN_TYPEHASH = keccak256("Swap(address txOwner,bytes4 functionSelector,uint256 amountIn,uint256 amountOut,address[] path,address to,uint256 nonce,uint256 deadline)");
+  bytes32 constant CLAIM_TYPEHASH = keccak256("Claim(uint256 round,uint256 order,bytes32 mimcHash,bytes32 txHash,bytes32 proofHash)");
   bytes32 public DOMAIN_SEPARATOR;
 
   modifier ensure(uint256 deadline) {
@@ -612,10 +613,26 @@ contract TexRouter02 is ITexRouter02 {
       swap.nonce,
       swap.deadline
     );
-    bytes32 digest = keccak256(abi.encode(round, order, proofHash, txMIMC, txHash));
-    require(
-      ecrecover(digest, v, r, s) == operator,
-      "TexRouter: Claim is not accepted. Check signature"
+
+    require(ecrecover(keccak256(
+          abi.encodePacked(
+            "\x19\x01",
+            DOMAIN_SEPARATOR,
+            keccak256(abi.encode(
+              CLAIM_TYPEHASH,
+              round,
+              order,
+              txMIMC,
+              txHash,
+              proofHash
+            ))
+          )
+        ),
+        v, 
+        r, 
+        s
+      ) == operator, 
+      "invalid operator"
     );
   }
 
